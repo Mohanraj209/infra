@@ -1,8 +1,15 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # Kubernetes Cluster Health Check — All Environments
-# Runs every 6 hours across all 10 MOSIP environments in parallel
-# New checks: failing services, pod restarts (weekday/Monday window),
-#             disk space (NFS / Postgres / ActiveMQ) with 90% threshold
+# Runs every 6 hours across all MOSIP environments (sequentially via matrix)
+# Secrets are read from per-environment GitHub Environments:
+#   - KUBECONFIG              (environment secret, base64-encoded kubeconfig)
+#   - CLUSTER_WIREGUARD_WG0   (environment secret, wg0.conf contents)
+# Shared repository secrets:
+#   - SLACK_WEBHOOK_URL
+#   - DISK_CHECK_SSH_KEY
+#
+# IMPORTANT: each matrix `env` value MUST exactly match a GitHub Environment name
+# under Settings → Environments. Mismatches will fail environment resolution.
 # ═══════════════════════════════════════════════════════════════════════════════
 name: Kubernetes Cluster Health Check
 
@@ -14,7 +21,7 @@ on:
       environments:
         description: |
           Environments to check (comma-separated). Leave BLANK to run ALL.
-          Valid values: qajava21, esperf, dev-int-inji, dev, dev11, dev2, esdev, esqa2, qa11new, qainji, collab, released, synergy1
+          Valid values: qa-java21, esperf, dev-int-inji, dev, dev11, dev2, esdev, esqa2, qa11new, qainji, collab, released, synergy
         required: false
         default: ''         # blank = ALL (same behaviour as the cron trigger)
       notify_slack:
@@ -28,8 +35,8 @@ jobs:
 
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 0  Build the environment matrix dynamically
-  # Each env needs its own KUBECONFIG secret named KUBECONFIG_<ENV_UPPER>
-  # e.g. KUBECONFIG_QA21, KUBECONFIG_QA22, KUBECONFIG_DEV1 ...
+  # Each env name below MUST match a GitHub Environment holding a KUBECONFIG
+  # (and CLUSTER_WIREGUARD_WG0) environment secret.
   # ───────────────────────────────────────────────────────────────────────────
   build-matrix:
     name: Build Environment Matrix
@@ -41,13 +48,15 @@ jobs:
       - name: Resolve target environments
         id: set-matrix
         run: |
-          # ── Full list of your 10 environments ─────────────────────────────
-          # Format: "name:slack_channel"  (channel is optional, falls back to default)
-          # vm_host        → external VM hosting NFS + ActiveMQ (+ Postgres if postgres_mode=vm)
-          # postgres_mode  → "vm"        : postgres lives on vm_host, checked via SSH df
-          #                  "incluster" : postgres lives in k8s, checked via kubectl exec
+          # ── Full list of environments ─────────────────────────────────────
+          # Format fields:
+          #   env            → MUST equal the GitHub Environment name
+          #   channel        → Slack channel (optional, falls back to default)
+          #   vm_host        → external VM hosting NFS + ActiveMQ (+ Postgres if postgres_mode=vm)
+          #   postgres_mode  → "vm"        : postgres on vm_host, checked via SSH df
+          #                    "incluster" : postgres in k8s, checked via kubectl exec
           ALL_ENVS='[
-            {"env":"qajava21",  "channel":"#cluster_health",  "vm_host":"postgres.qajava21.mosip.net",  "postgres_mode":"vm"},
+            {"env":"qa-java21",  "channel":"#cluster_health",  "vm_host":"postgres.qajava21.mosip.net",  "postgres_mode":"vm"},
             {"env":"esperf",  "channel":"#cluster_health",  "vm_host":"postgres.esperf.mosip.net",  "postgres_mode":"incluster"},
             {"env":"dev-int-inji",  "channel":"#cluster_health",  "vm_host":"postgres.dev-int-inji.mosip.net",  "postgres_mode":"incluster"},
             {"env":"dev", "channel":"#cluster_health", "vm_host":"postgres.dev.mosip.net", "postgres_mode":"vm"},
@@ -59,7 +68,7 @@ jobs:
             {"env":"qainji",  "channel":"#cluster_health",  "vm_host":"postgres.qainji.mosip.net",  "postgres_mode":"incluster"},
             {"env":"collab",  "channel":"#cluster_health",  "vm_host":"postgres.collab.mosip.net",  "postgres_mode":"vm"},
             {"env":"released",  "channel":"#cluster_health",  "vm_host":"postgres.released.mosip.net",  "postgres_mode":"vm"},
-            {"env":"synergy1",  "channel":"#cluster_health",  "vm_host":"postgres.synergy.mosip.net",  "postgres_mode":"vm"}
+            {"env":"synergy",  "channel":"#cluster_health",  "vm_host":"postgres.synergy.mosip.net",  "postgres_mode":"vm"}
           ]'
 
 
@@ -82,12 +91,16 @@ jobs:
           echo "Running on: $(echo $MATRIX | jq -r '[.include[].env] | join(", ")')"
 
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 1  Per-environment health check (runs in parallel for all envs)
+  # JOB 1  Per-environment health check
+  # `environment: ${{ matrix.env }}` binds each matrix run to its GitHub
+  # Environment, so `secrets.KUBECONFIG` / `secrets.CLUSTER_WIREGUARD_WG0`
+  # resolve to that environment's values automatically.
   # ───────────────────────────────────────────────────────────────────────────
   health-check:
     name: "[${{ matrix.env }}] Health Check"
     runs-on: ubuntu-latest
     needs: build-matrix
+    environment: ${{ matrix.env }}
     if: needs.build-matrix.outputs.matrix != ''
     strategy:
       fail-fast: false          # Don't cancel other envs if one fails
@@ -146,40 +159,18 @@ jobs:
           echo "=== Curl Rancher API ==="
           curl -sk --max-time 10 https://172.31.15.240/ping || true
 
-      # ── Kubeconfig — secret per env ───────────────────────────────────────
-      # Secret naming convention: KUBECONFIG_QAJAVA21, KUBECONFIG_DEV_INT_INJI, etc.
-      # Rule: env name → uppercase + hyphens replaced with underscores
-      # e.g. dev-int-inji → KUBECONFIG_DEV_INT_INJI
+      # ── Kubeconfig — environment secret ───────────────────────────────────
+      # Each GitHub Environment holds a `KUBECONFIG` secret containing the
+      # base64-encoded kubeconfig for that cluster. No per-env naming needed.
       - name: Write kubeconfig
-        env:
-          KUBECONFIG_QAJAVA21:     ${{ secrets.KUBECONFIG_QAJAVA21 }}
-          KUBECONFIG_DEV_INT_INJI: ${{ secrets.KUBECONFIG_DEV_INT_INJI }}
-          KUBECONFIG_ESPERF:       ${{ secrets.KUBECONFIG_ESPERF }}
-          KUBECONFIG_DEV:        ${{ secrets.KUBECONFIG_DEV }}
-          KUBECONFIG_DEV11:        ${{ secrets.KUBECONFIG_DEV11 }}
-          KUBECONFIG_DEV2:        ${{ secrets.KUBECONFIG_DEV2 }}
-          KUBECONFIG_ESDEV:        ${{ secrets.KUBECONFIG_ESDEV }}
-          KUBECONFIG_ESQA2:        ${{ secrets.KUBECONFIG_ESQA2 }}
-          KUBECONFIG_QA11NEW:        ${{ secrets.KUBECONFIG_QA11NEW }}
-          KUBECONFIG_QAINJI:        ${{ secrets.KUBECONFIG_QAINJI }}
-          KUBECONFIG_COLLAB:        ${{ secrets.KUBECONFIG_COLLAB }}
-          KUBECONFIG_RELEASED:        ${{ secrets.KUBECONFIG_RELEASED }}
-          KUBECONFIG_SYNERGY1:        ${{ secrets.KUBECONFIG_SYNERGY1 }}
-
-          # ── Add a new line here for every new environment ──────────────
         run: |
           mkdir -p $HOME/.kube
 
-          # Convert env name to secret key: dev-int-inji → KUBECONFIG_DEV_INT_INJI
-          ENV_KEY="KUBECONFIG_$(echo '${{ matrix.env }}' | tr '[:lower:]-' '[:upper:]_')"
-          echo "Resolving secret: $ENV_KEY"
-
-          # Indirect variable expansion — picks the right env var at runtime
-          KUBECONFIG_DATA="${!ENV_KEY}"
+          KUBECONFIG_DATA="${{ secrets.KUBECONFIG }}"
 
           if [ -z "$KUBECONFIG_DATA" ]; then
-            echo "::error::Secret $ENV_KEY is empty or not set."
-            echo "::error::Create it with: gh secret set $ENV_KEY --body \"\$(base64 -w0 ~/.kube/config-${{ matrix.env }})\""
+            echo "::error::KUBECONFIG secret is empty or not set for environment '${{ matrix.env }}'."
+            echo "::error::Add a KUBECONFIG environment secret under Settings → Environments → ${{ matrix.env }}."
             exit 1
           fi
 
