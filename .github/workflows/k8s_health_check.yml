@@ -21,7 +21,7 @@ on:
       environments:
         description: |
           Environments to check (comma-separated). Leave BLANK to run ALL.
-          Valid values: qa-java21, esperf, dev-int, dev, dev11, dev2, esdev, esqa2, qa11new, qainji, collab, released, synergy
+          Valid values: qa-java21, esperf, dev-int-inji, dev, dev11, dev2, esdev, esqa2, qa11new, qainji, collab, released, synergy
         required: false
         default: ''         # blank = ALL (same behaviour as the cron trigger)
       notify_slack:
@@ -58,7 +58,7 @@ jobs:
           ALL_ENVS='[
             {"env":"qa-java21",  "channel":"#cluster_health",  "vm_host":"postgres.qajava21.mosip.net",  "postgres_mode":"vm"},
             {"env":"esperf",  "channel":"#cluster_health",  "vm_host":"postgres.esperf.mosip.net",  "postgres_mode":"incluster"},
-            {"env":"dev-int",  "channel":"#cluster_health",  "vm_host":"postgres.dev-int-inji.mosip.net",  "postgres_mode":"incluster"},
+            {"env":"dev-int-inji",  "channel":"#cluster_health",  "vm_host":"postgres.dev-int-inji.mosip.net",  "postgres_mode":"incluster"},
             {"env":"dev", "channel":"#cluster_health", "vm_host":"postgres.dev.mosip.net", "postgres_mode":"vm"},
             {"env":"dev11", "channel":"#cluster_health", "vm_host":"postgres.dev11.mosip.net", "postgres_mode":"vm"},
             {"env":"dev2",  "channel":"#cluster_health",  "vm_host":"postgres.dev2.mosip.net",  "postgres_mode":"vm"},
