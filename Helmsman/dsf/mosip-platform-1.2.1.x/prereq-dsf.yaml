@@ -17,11 +17,8 @@ namespaces:
     protected: true
   monitoring:
     protected: true
-  # As part of a move to a standalone observability stack, we're replacing rancher-monitoring with the upstream kube-prometheus-stack (Prometheus, Alertmanager, node-exporter) and rancher-logging with Loki. Metrics, logs, and alerting are unaffected in coverage — what changes is the backend, where data surfaces (a single standalone Grafana for both metrics and logs), and the alerting destination (email via Alertmanager). The stack is now independent of Rancher.
-  # cattle-monitoring-system:
-  #  protected: true
-  # cattle-logging-system:
-  #   protected: true
+  # rancher-monitoring / rancher-logging are replaced by the standalone
+  # kube-prometheus-stack (monitoring) and Loki + Grafana + Alloy (logging) stacks.
   istio-system:
     protected: true
   istio-operator:
@@ -35,17 +32,21 @@ apps:
   kube-prometheus-stack:
     namespace: monitoring
     enabled: true
-    version: 88.6.2        
+    version: 88.6.2
     chart: prometheus-community/kube-prometheus-stack
-    valuesFile: "$WORKDIR/utils/loki-monitoring-values.yaml"
+    valuesFile: "$WORKDIR/utils/prometheus-values.yaml"
     wait: true
     timeout: 900
     priority: -6
     hooks:
-      preInstall: "$WORKDIR/hooks/monitoring-preinstall.sh ${SMTP_PASSWORD}"
+      # Applies the CRDs of this chart version and creates/updates the SMTP
+      # secret (SMTP_PASSWORD is read from the env). Keep the version argument
+      # in sync with `version` above.
+      preInstall: "$WORKDIR/hooks/monitoring-preinstall.sh 88.6.2"
+      preUpgrade: "$WORKDIR/hooks/monitoring-preinstall.sh 88.6.2"
       postInstall: "$WORKDIR/hooks/install-istio-and-httpbin.sh ${domain_name} ${env_name}"
       postUpgrade: "$WORKDIR/hooks/install-istio-and-httpbin.sh ${domain_name} ${env_name}"
-    
+
   # rancher-monitoring-crd:
   #   namespace: cattle-monitoring-system
   #   enabled: true
@@ -153,7 +154,12 @@ apps:
     priority: -3
     timeout: 300
     hooks:
+      # grafana-admin secret (admin.existingSecret) from GRAFANA_ADMIN_PASSWORD
+      preInstall: "$WORKDIR/hooks/grafana-preinstall.sh"
+      preUpgrade: "$WORKDIR/hooks/grafana-preinstall.sh"
+      # (re)apply dashboard ConfigMaps so dashboard changes reach existing envs
       postInstall: "$WORKDIR/hooks/import-dashboards.sh"
+      postUpgrade: "$WORKDIR/hooks/import-dashboards.sh"
 
   alloy:
     namespace: logging
@@ -168,9 +174,16 @@ apps:
   istio-addons-loki:
     namespace: logging
     enabled: true
-    version: 0.0.1-develop
-    chart: $WORKDIR/utils/istio-addons/loki-istio-addons-0.0.1-develop.tgz
+    version: 1.0.0
+    chart: mosip/istio-addons
     set:
+      istio.name: "grafana"
       istio.host: "grafana.${domain_name}"
+      istio.ingressController: "ingressgateway-internal"
+      istio.port.name: "grafana"
+      istio.port.number: "80"
+      istio.port.protocol: "HTTP"
+      istio.serviceHost: "grafana"
+      istio.servicePort: "80"
     wait: true
     priority: -1
