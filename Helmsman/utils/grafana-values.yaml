@@ -1,14 +1,18 @@
 # =============================================================================
 # Grafana - Production-Ready Values for Loki Logging
-# Cluster: RKE2 v1.28.9 | Namespace: logging
-# Helm Chart: grafana-community/grafana 11.3.2  (appVersion 12.4.1)
+# Namespace: logging
+# Helm Chart: grafana-community/grafana 12.11.2  (appVersion 13.2.0)
 # =============================================================================
 # --- Replicas ---
 replicas: 1
 # --- Admin Credentials ---
-# Change this password before deploying!
-adminUser: admin
-adminPassword: "Mosip@Loki123!"   # ⚠️  CHANGE THIS
+# Read from the `grafana-admin` secret, created by hooks/grafana-preinstall.sh
+# from the GRAFANA_ADMIN_PASSWORD GitHub secret (a random password is generated
+# if that secret is not set). Never put the password in this file.
+admin:
+  existingSecret: grafana-admin
+  userKey: admin-user
+  passwordKey: admin-password
 # --- Resource Limits ---
 resources:
   requests:
@@ -52,11 +56,11 @@ datasources:
         type: prometheus
         url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
         access: proxy
-        isDefault: false 
+        isDefault: false
         version: 1
         editable: true
         jsonData:
-          timeInterval: 1m  
+          timeInterval: 1m
 # --- Default Dashboards ---
 dashboardProviders:
   dashboardproviders.yaml:
@@ -152,4 +156,4 @@ podAnnotations:
 # --- Labels ---
 commonLabels:
   app.kubernetes.io/part-of: logging
-  cluster: rke2
+  cluster: "${env_name}"

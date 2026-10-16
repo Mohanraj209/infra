@@ -2,7 +2,10 @@
 # Chart: grafana/alloy v1.6.2 (app v1.14.0)
 # Loki endpoint: http://loki.logging.svc.cluster.local:3100
 # Deploy to: logging namespace
-# Cluster: rke2 | Environment: dev-int
+#
+# NOTE: this file is rendered with `helmsman --subst-env-values`, so every
+# dollar sign (comments included) is expanded as an environment variable.
+# Write a literal dollar sign as two dollar signs (Helmsman's escape).
 #
 # Uses loki.source.kubernetes which fetches logs via Kubernetes API
 # (no hostPath volume mounts needed, no path building required)
@@ -66,12 +69,13 @@ alloy:
           source_labels = ["__meta_kubernetes_pod_node_name"]
           target_label = "host"
         }
-        // Short container ID makes each stream unique
+        // Short container ID makes each stream unique.
+        // `replacement` is omitted on purpose: it defaults to the first capture
+        // group, and a backreference would be wiped by --subst-env-values.
         rule {
           source_labels = ["__meta_kubernetes_pod_container_id"]
           target_label = "container_id"
           regex = ".*://(.{12}).*"
-          replacement = "$1"
         }
         // app label: prefer app label, fall back to app.kubernetes.io/name
         rule {
@@ -97,10 +101,7 @@ alloy:
       // STAGE 1: Drop noise early (before expensive processing)
       // ==========================================================================
       loki.process "drop_noise" {
-        forward_to = [
-          loki.process.access_to_metrics.receiver,
-          loki.process.main_logs.receiver,
-        ]
+        forward_to = [loki.process.main_logs.receiver]
 
         // Drop very old logs
         stage.drop {
@@ -108,67 +109,17 @@ alloy:
           drop_counter_reason = "too_old"
         }
 
-        // Aggressive early drop for common high-volume noise
+        // Drop health-check / scrape noise. Anchored to probe request paths and
+        // the kube-probe user agent only, so ordinary log lines that merely
+        // contain words like "already", "mapping" or "delivered" are kept.
         stage.drop {
-          expression = ".*(actuator|kube-probe|/metrics|health|ping|ready|live|GET / ).*"
+          expression = ".*(kube-probe/|/actuator/(health|prometheus|info)|/(healthz|livez|readyz)([?\" ]|$$)).*"
           drop_counter_reason = "health_noise"
         }
       }
 
       // ==========================================================================
-      // PIPELINE A: ACCESS logs → Prometheus metrics (log-to-metric)
-      // ==========================================================================
-      loki.process "access_to_metrics" {
-        forward_to = [loki.write.loki.receiver]
-
-        // Parse JSON FIRST so `level` and `timeTaken` are usable below
-        stage.json {
-          expressions = {
-            level      = "level",
-            statusCode = "statusCode",
-            timeTaken  = "timeTaken",
-            requestURI = "req.requestURI",
-          }
-        }
-
-        // Promote `level` to a stream label so the next stage.match selector works
-        stage.labels {
-          values = {
-            level = "level",
-          }
-        }
-
-        // Only process ACCESS logs
-        stage.match {
-          selector = "{level!=\"ACCESS\"}"
-          action = "drop"
-        }
-
-        stage.labels {
-          values = {
-            statusCode = "statusCode",
-            requestURI = "requestURI",
-          }
-        }
-
-        stage.metrics {
-          metric.histogram {
-            name = "http_request_duration_ms"
-            description = "HTTP request duration in ms from ACCESS logs"
-            source = "timeTaken"
-            buckets = [10, 50, 100, 200, 500, 1000, 2000, 5000]
-          }
-        }
-
-        // Drop after metric extraction (main_logs handles storage with sampling)
-        stage.match {
-          selector = "{level=\"ACCESS\"}"
-          action = "drop"
-        }
-      }
-
-      // ==========================================================================
-      // PIPELINE B: Main logs → Loki (with sampling)
+      // MAIN PIPELINE: logs → Loki
       // ==========================================================================
       loki.process "main_logs" {
         forward_to = [loki.write.loki.receiver]
@@ -197,23 +148,11 @@ alloy:
           action = "drop"
         }
 
-        // ACCESS logs: sample at 10% (metrics pipeline already extracted full data)
-        stage.match {
-          selector = "{level=\"ACCESS\"}"
-          stage.sampling {
-            rate = 0.1
-          }
-        }
-
-        // INFO logs: sample at 30%
-        stage.match {
-          selector = "{level=~\"(?i)info\"}"
-          stage.sampling {
-            rate = 0.3
-          }
-        }
-
-        // WARN and ERROR pass through at 100%
+        // ACCESS, INFO, WARN and ERROR are all kept at 100%. The response-time
+        // dashboards count ACCESS lines, so ACCESS must never be sampled.
+        // Sampling INFO logs is a retention-policy decision; if it is ever
+        // approved, add a stage.match on {level=~"(?i)info"} with
+        // stage.sampling here and document it.
 
         stage.labels {
           values = {
@@ -223,7 +162,7 @@ alloy:
 
         stage.static_labels {
           values = {
-            cluster     = "rke2",
+            cluster     = "${env_name}",
             environment = "${env_name}",
           }
         }
@@ -242,7 +181,7 @@ alloy:
           max_backoff_retries = 10
         }
         external_labels = {
-          cluster     = "rke2",
+          cluster     = "${env_name}",
           environment = "${env_name}",
           log_source  = "alloy",
         }
@@ -261,6 +200,24 @@ alloy:
       valueFrom:
         fieldRef:
           fieldPath: spec.nodeName
+
+  # Resources and probes must live under `alloy:` — the grafana/alloy chart
+  # ignores them at the top level. Readiness is built into the chart
+  # (alloy.initialDelaySeconds / alloy.timeoutSeconds).
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  livenessProbe:
+    httpGet:
+      path: /-/healthy
+      port: 12345
+    initialDelaySeconds: 30
+    periodSeconds: 15
 
 # ============================================================
 # DAEMONSET: Run on every node
@@ -282,7 +239,8 @@ controller:
       effect: NoSchedule
 
 # ============================================================
-# RBAC
+# RBAC — the chart's default rbac.rules already grant what
+# discovery.kubernetes and loki.source.kubernetes need.
 # ============================================================
 rbac:
   create: true
@@ -291,44 +249,5 @@ serviceAccount:
   create: true
   name: alloy-loki
 
-clusterRole:
-  create: true
-  rules:
-    - apiGroups: [""]
-      resources:
-        - nodes
-        - nodes/proxy
-        - services
-        - endpoints
-        - pods
-        - pods/log
-        - namespaces
-      verbs: ["get", "list", "watch"]
-
-# ============================================================
-# RESOURCES
-# ============================================================
-resources:
-  requests:
-    cpu: 50m
-    memory: 128Mi
-  limits:
-    cpu: 500m
-    memory: 512Mi
-
 serviceMonitor:
   enabled: false
-
-livenessProbe:
-  httpGet:
-    path: /-/healthy
-    port: 12345
-  initialDelaySeconds: 30
-  periodSeconds: 15
-
-readinessProbe:
-  httpGet:
-    path: /-/ready
-    port: 12345
-  initialDelaySeconds: 30
-  periodSeconds: 15

@@ -319,7 +319,7 @@ module "aws-resource-creation" {
         to_port : 9100,
         protocol : "TCP",
         cidr_blocks      = [var.network_cidr],
-        ipv6_cidr_blocks = ["::/0"]
+        ipv6_cidr_blocks = []
       },
       {
         description : "kube-controller-manager metrics"
@@ -327,7 +327,7 @@ module "aws-resource-creation" {
         to_port : 10257,
         protocol : "TCP",
         cidr_blocks      = [var.network_cidr],
-        ipv6_cidr_blocks = ["::/0"]
+        ipv6_cidr_blocks = []
       },
       {
         description : "kube-scheduler metrics"
@@ -335,7 +335,7 @@ module "aws-resource-creation" {
         to_port : 10259,
         protocol : "TCP",
         cidr_blocks      = [var.network_cidr],
-        ipv6_cidr_blocks = ["::/0"]
+        ipv6_cidr_blocks = []
       },
       {
         description : "kube-proxy metrics"
@@ -343,7 +343,7 @@ module "aws-resource-creation" {
         to_port : 10249,
         protocol : "TCP",
         cidr_blocks      = [var.network_cidr],
-        ipv6_cidr_blocks = ["::/0"]
+        ipv6_cidr_blocks = []
       },
       {
         description : "PostgreSQL port (open access)"
@@ -433,7 +433,7 @@ module "aws-resource-creation" {
         to_port : 9100,
         protocol : "TCP",
         cidr_blocks      = [var.network_cidr],
-        ipv6_cidr_blocks = ["::/0"]
+        ipv6_cidr_blocks = []
       },
       {
         description : "kube-proxy metrics"
@@ -441,7 +441,7 @@ module "aws-resource-creation" {
         to_port : 10249,
         protocol : "TCP",
         cidr_blocks      = [var.network_cidr],
-        ipv6_cidr_blocks = ["::/0"]
+        ipv6_cidr_blocks = []
       },
       {
         description : "PostgreSQL port (open access)"
@@ -507,7 +507,7 @@ module "aws-resource-creation" {
         to_port : 9100,
         protocol : "TCP",
         cidr_blocks      = [var.network_cidr],
-        ipv6_cidr_blocks = ["::/0"]
+        ipv6_cidr_blocks = []
       },
       {
         description : "kube-proxy metrics"
@@ -515,7 +515,7 @@ module "aws-resource-creation" {
         to_port : 10249,
         protocol : "TCP",
         cidr_blocks      = [var.network_cidr],
-        ipv6_cidr_blocks = ["::/0"]
+        ipv6_cidr_blocks = []
       },
       {
         description : "PostgreSQL port (open access)"

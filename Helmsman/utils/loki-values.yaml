@@ -1,8 +1,8 @@
 # =============================================================================
-# Loki Monolithic (SingleBinary) - Production-Ready Values
-# Cluster: RKE2 v1.28.9 | 8 Nodes | ~15-20 Microservices
+# Loki Monolithic (SingleBinary) values for rapid deployment
 # Helm Chart: grafana/loki v6.55.0 | App Version: 3.x
-# Updated: 28 Aug 2026 - Scaled to 8-node cluster
+# Sized for a small/medium cluster (sandbox / dev). Raise the limits, resources
+# and PVC size below for larger or production clusters.
 # =============================================================================
 
 deploymentMode: SingleBinary
@@ -26,18 +26,18 @@ loki:
           prefix: loki_index_
           period: 24h
 
-  # --- Ingestion & Query Limits (tuned for 8 nodes, ~15-20 microservices) ---
+  # --- Ingestion & Query Limits ---
   limits_config:
-    # Scaled ~8/11 from the 11-node config, kept above steady-state to absorb
-    # spikes (e.g. a node coming back online and replaying buffered logs).
+    # Kept above steady-state to absorb spikes (e.g. a node coming back
+    # online and replaying buffered logs).
     ingestion_rate_mb: 48
     ingestion_burst_size_mb: 96
     reject_old_samples: true
     reject_old_samples_max_age: 1h
     creation_grace_period: 10m
-    # Stream cardinality: 8 nodes worth of unique pod/container/app combos.
-    # 40k leaves comfortable headroom; raise only if you see "max streams"
-    # rejections in Loki logs.
+    # Stream cardinality (unique pod/container/app combos). 40k leaves
+    # comfortable headroom; raise only if you see "max streams" rejections
+    # in Loki logs.
     max_streams_per_user: 40000
     max_global_streams_per_user: 40000
     max_line_size: 262144
@@ -118,14 +118,14 @@ loki:
 singleBinary:
   replicas: 1
 
-  # --- Resources (sized to Loki's own binary; unchanged from 11-node) ---
-  # Loki's binary sizing tracks fan-in, not node count directly. The 8-node
-  # fan-in fits comfortably in this tier. Watch for OOMKills/CPU throttling
-  # before considering the heavier tier below.
+  # --- Resources ---
+  # Requests are kept modest so Loki fits on rapid-deploy sandboxes; the
+  # limits allow bursting. For busy clusters raise requests towards the limits
+  # (or use the heavier tier below) if you see OOMKills / CPU throttling.
   resources:
     requests:
-      cpu: "2000m"
-      memory: "4Gi"
+      cpu: "500m"
+      memory: "1Gi"
     limits:
       cpu: "4000m"
       memory: "6Gi"
@@ -141,14 +141,12 @@ singleBinary:
 
   persistence:
     enabled: true
-    # WARNING: nfs-csi has been the source of repeated "no space left on device"
-    # outages on this cluster. Strongly consider a block / local StorageClass
-    # for Loki — its TSDB does poorly on NFS-backed volumes.
+    # nfs-csi is the StorageClass available on rapid-deploy clusters. Loki's
+    # TSDB performs better on block / local storage, so prefer one where
+    # available, and watch the NFS share for free space.
     storageClass: "nfs-csi"
-    # 40Gi covers 8 nodes at 72h retention with headroom:
-    # ~7-15 MB/s realistic ingest → 35-70 GB / 3 days of chunks + index.
-    # Drop to 30Gi if NFS pool pressure is a concern; raise to 75Gi if
-    # retention bumps to a week.
+    # Sized for 72h retention with headroom; raise if retention or log
+    # volume grows (roughly 2.5x for a week of retention).
     size: 40Gi
     accessModes:
       - ReadWriteOnce
@@ -226,4 +224,4 @@ global:
 
 commonLabels:
   app.kubernetes.io/part-of: logging
-  cluster: rke2
+  cluster: "${env_name}"
